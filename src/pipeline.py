@@ -11,7 +11,10 @@ from src.modules.utils.video_utils import load_and_process_frames
 
 
 # from src.modules.utils.audio_utils import extract_audio_features, normalize_audio_features
-from src.modules.utils.audio_utils import extract_audio_features_from_video, normalize_audio_features
+from src.modules.utils.audio_utils import extract_audio_features_from_video, normalize_audio_features,  align_audio_to_video
+
+from src.modules.utils.audio_utils import  extract_audio_features
+from src.modules.utils.preprocess_utils import compute_combined_score, detect_highlights, compute_audio_change_rate
 
 from src.modules.utils.pose_utils import PoseFeatureExtractor
 from src.modules.models.multimodal_model import MultimodalModel
@@ -21,7 +24,7 @@ import torch
 
 import matplotlib.pyplot as plt
 import torch
-
+import numpy as np
 
 import os
 os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
@@ -126,59 +129,67 @@ def process_video_for_highlight_detection(video_path):
     preprocessed_video = load_and_process_frames(video_path)
     print(f"Preprocessed video shape: {preprocessed_video.shape}")
 
-
-    # audio_features = extract_audio_features(video_path, feature_type='mfcc')
-    # normalized_features = normalize_audio_features(audio_features)
-
-    # 1.Video
-    # 加载 SlowFast 模型
+    # Video Feature
+    ## Load the SlowFast model
     slowfast_model = load_slowfast_model()
-
     debug_model = DebugSlowFast(slowfast_model)
-
-    # 2.Audio
-    print("AUDIO")
 
     # audio_features = extract_audio_features_from_video(video_path, feature_type='mfcc')
     # normalized_audio_features = normalize_audio_features(audio_features)
     # print(f"Normalized Audio Features Shape: {normalized_audio_features.shape}")
+
+    # Input
+    slowfast_inputs = prepare_slowfast_inputs(preprocessed_video)
+
+    # Get SlowFast Output
+    with torch.no_grad():
+        # slowfast_outputs = slowfast_model(slowfast_inputs)
+        slowfast_outputs = debug_model(slowfast_inputs)
+    print(f"SlowFast outputs shape: {slowfast_outputs.shape}")
 
     # 3.Pose
     print("POSE")
     # pose_extractor = PoseFeatureExtractor()
     # pose_features = pose_extractor.extract_pose_features(video_path)
     # print(f"Pose features extracted: {pose_features}")
-
-
-    # 准备输入
-    slowfast_inputs = prepare_slowfast_inputs(preprocessed_video)
-
-    # 获取 SlowFast 输出
-    with torch.no_grad():
-        # slowfast_outputs = slowfast_model(slowfast_inputs)
-        slowfast_outputs = debug_model(slowfast_inputs)
-    print(f"SlowFast outputs shape: {slowfast_outputs.shape}")
-
-    # 加载 HighlightDetectionHead
+                                                           
+    # Load HighlightDetectionHead
     in_channels = slowfast_outputs.shape[1]
     hidden_dim = 512
     num_classes = 1
     highlight_head = HighlightDetectionHead(in_channels, hidden_dim, num_classes)
-    #######
 
     # 获取高光检测结果
     highlight_scores = highlight_head(slowfast_outputs)  # 输出形状: [Batch, T, num_classes]
-    highlight_scores = highlight_scores.squeeze(-1)  # 去掉 num_classes 维度，形状: [Batch, T]
+    highlight_scores = highlight_scores.squeeze(-1).detach().cpu().numpy()  # 去掉 num_classes 维度，形状: [Batch, T] // Numpy
     print(f"Highlight scores shape: {highlight_scores.shape}")
 
+
+    # Audio Feature
+    print("Extracting AUDIO features...")
+    audio_features = extract_audio_features(video_path)
+    print(f"Audio features shape: {audio_features.shape}")
+    audio_change_rate = compute_audio_change_rate(audio_features)
+
+    _, T_video= highlight_scores.shape
+    aligned_audio_features = align_audio_to_video(audio_features, T_video)
+    print(f"Aligned audio features shape: {aligned_audio_features.shape}")
+
+    print("Computing combined scores...")
+    combined_scores = compute_combined_score(highlight_scores, aligned_audio_features)
+    print(f"Combined scores shape: {combined_scores.shape}")
+    
     # 处理结果 - 动态调整阈值
-    mean_score = highlight_scores.mean().item()
-    std_score = highlight_scores.std().item()
+    mean_score = combined_scores.mean()
+    std_score = combined_scores.std()
     highlight_threshold = mean_score + 0.5 * std_score  # 动态阈值: 平均值加半个标准差
 
     # 高光时间步判断
-    highlights = (highlight_scores > highlight_threshold).nonzero(as_tuple=True)
-    highlight_scores_np = highlight_scores.detach().cpu().numpy()  # 转换为 NumPy 数组
+    highlights = (combined_scores  > highlight_threshold).nonzero()[0]
+    print(f"Highlight time steps: {highlights}")
+    
+    # highlight_scores_np = highlight_scores.detach().cpu().numpy()  # 转换为 NumPy 数组
+    highlight_scores_np = np.expand_dims(combined_scores, axis=0)
 
     print("Highlight scores for each time step:")
     print(highlight_scores_np)
@@ -212,10 +223,10 @@ def process_video_for_highlight_detection(video_path):
     # plt.tight_layout()
     # plt.show()
 
-    print("Highlight Scores NP:", highlight_scores_np)
-    print("Highlight Scores NP Shape:", highlight_scores_np.shape)
+    # print("Highlight Scores NP:", highlight_scores_np)
+    # print("Highlight Scores NP Shape:", highlight_scores_np.shape)
 
-    print("Processed Highlights:", highlights)
+    # print("Processed Highlights:", highlights)
 
 
     return highlight_scores_np, highlights, highlight_threshold
