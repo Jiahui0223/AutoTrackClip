@@ -8,50 +8,52 @@ class BasicClipper:
     """
     基础视频剪辑器，用于根据高光时间段裁剪视频。
     """
-    def clip(self, video_path, highlights, output_path):
+    def clip(self, video_path, highlights, output_path, transition_duration=1.0):
         """
-        根据高光时刻剪辑视频并保存输出。
+        Clip video based on highlight intervals, apply transitions, and save the output.
 
         Args:
-            video_path (str): 输入视频路径。
-            highlights (list): 高光时间段列表，每个元素是 (start_time, end_time) 的元组。
-            output_path (str): 输出视频路径。
+            video_path (str): Path to the input video.
+            highlights (list): List of (start_time, end_time) tuples for highlights.
+            output_path (str): Path to save the final video.
+            transition_duration (float): Duration of the transition between clips (in seconds).
 
         Returns:
-            str: 保存的剪辑视频路径。
+            str: Path to the saved highlight video.
         """
-        print(f"开始剪辑视频: {video_path}")
-        print(f"高光时段: {highlights}")
-        
-        # 打开视频
+        print(f"Processing video: {video_path}")
+        print(f"Highlights: {highlights}")
+
+        # Open the video
         try:
             video = VideoFileClip(video_path)
         except Exception as e:
-            raise ValueError(f"无法打开视频文件: {e}")
-        
-        # 裁剪高光片段
-        clips = []
+            raise ValueError(f"Cannot open video file: {e}")
+
+        # Extract highlight clips
+        temp_clips = []
         for i, (start_time, end_time) in enumerate(highlights):
             try:
                 clip = video.subclip(start_time, end_time)
-                clips.append(clip)
-                print(f"裁剪片段 {i}: {start_time}s - {end_time}s")
+                temp_clip_path = f"temp_clip_{i}.mp4"
+                clip.write_videofile(temp_clip_path, codec="libx264")
+                temp_clips.append(temp_clip_path)
             except Exception as e:
-                print(f"裁剪片段失败 ({start_time}-{end_time}): {e}")
+                print(f"Failed to process clip ({start_time}-{end_time}): {e}")
                 continue
 
-        if not clips:
-            raise ValueError("没有可用的高光片段，无法生成输出视频。")
+        if not temp_clips:
+            raise ValueError("No valid highlight clips to generate output.")
 
-        # 合并片段
-        try:
-            final_clip = concatenate_videoclips(clips)
-            final_clip.write_videofile(output_path, codec="libx264", audio_codec="aac")
-            print(f"输出视频已保存到: {output_path}")
-        except Exception as e:
-            raise ValueError(f"视频合并失败: {e}")
-        
-        return output_path
+        # Combine clips with transitions
+        final_output_path = self._combine_clips(temp_clips, output_path, transition_duration)
+
+        # Clean up temporary files
+        for temp_clip in temp_clips:
+            if os.path.exists(temp_clip):
+                os.remove(temp_clip)
+
+        return final_output_path
 
     def convert_highlight_scores_to_intervals(self, highlight_scores, threshold, video_duration):
         """
@@ -140,3 +142,35 @@ class BasicClipper:
         highlights.append((start_frame * time_per_frame, frame_indices[-1] * time_per_frame))
 
         return highlights
+    def _combine_clips(self, clip_paths, output_path, transition_duration=1.0):
+        """
+        Combine multiple video clips with smooth transitions and save the final output.
+
+        Args:
+            clip_paths (list): List of file paths for the temporary clips.
+            output_path (str): Path to save the final merged video.
+            transition_duration (float): Duration of the transition between clips (in seconds).
+
+        Returns:
+            str: Path to the saved final video.
+        """
+        from moviepy.editor import VideoFileClip, concatenate_videoclips, CompositeVideoClip, vfx
+
+        # Load all video clips
+        clips = [VideoFileClip(clip) for clip in clip_paths]
+
+        # Apply transitions between clips
+        clips_with_transitions = []
+        for i, clip in enumerate(clips):
+            if i > 0:  # Apply transition to all clips except the first one
+                # Fade-in transition
+                clip = clip.crossfadein(transition_duration)
+            clips_with_transitions.append(clip)
+
+        # Concatenate all clips with transitions
+        final_clip = concatenate_videoclips(clips_with_transitions, method="compose")
+
+        # Write the final output to the specified path
+        final_clip.write_videofile(output_path, codec="libx264", audio_codec="aac")
+
+        return output_path
