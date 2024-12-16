@@ -38,8 +38,7 @@ Please make sure the following software and libraries are installed in your syst
       We used MixSort output so that we can predict action recognition on MixSort based cropped bounding boxes. You can run mix.py with setting correct paths.
       Working on maintaining quality of prediction. 
 
-###
-Thanks to 
+### Thanks
 1)Simone Francia for the basketball action dataset and paper on action classification with 3D-CNNs.
 2)hkair(https://github.com/hkair) for introducing a way for augumenting datasets.
 3)Authors of SportsMOT for releasing datasets and MixSort
